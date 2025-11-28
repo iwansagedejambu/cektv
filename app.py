@@ -296,16 +296,17 @@ if st.session_state.food_log:
     df = pd.DataFrame(st.session_state.food_log)
     st.dataframe(df)
 
-    totals = df[["kcal","protein","fat","carb","k","p","ca"]].sum()
+    totals = df[["kcal", "protein", "fat", "carb", "k", "p", "ca"]].sum()
     st.subheader("📊 Total nutrisi hari ini (perkiraan)")
     st.json({
-        "Energi (kcal)" : float(totals["kcal"]),
-        "Protein (g)"   : float(totals["protein"]),
-        "Lemak (g)"     : float(totals["fat"]),
-        "Karbo (g)"     : float(totals["carb"]),
-        "Kalium (mg)"   : float(totals["k"]),
-        "Fosfor (mg)"   : float(totals["p"]),
-        "Kalsium (mg)"  : float(totals["ca"]),
+        "Energi (kcal)": float(totals["kcal"]),
+        "Protein (g)": float(totals["protein"]),
+        "Lemak (g)": float(totals["fat"]),
+        "Karbo (g)": float(totals["carb"]),
+        "Kalium (mg)": float(totals["k"]),
+        "Fosfor (mg)": float(totals["p"]),
+        "Kalsium (mg)": float(totals["ca"]),
     })
 else:
     st.info("Belum ada makanan tercatat.")
+
