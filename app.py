@@ -12,7 +12,6 @@ st.set_page_config(page_title="Kt/V & Food Tracker (AI)", layout="wide")
 # ====== LOAD API KEY HUGGING FACE DARI SECRETS ======
 HF_TOKEN = st.secrets.get("HF_TOKEN", None)
 
-# DEBUG: lihat apa saja key secrets yang kebaca di Cloud
 st.sidebar.write("DEBUG secrets keys:", list(st.secrets.keys()))
 
 if not HF_TOKEN:
@@ -20,6 +19,7 @@ if not HF_TOKEN:
     st.stop()
 
 client = InferenceClient(token=HF_TOKEN)
+
 
 
 
