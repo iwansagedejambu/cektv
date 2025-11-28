@@ -284,7 +284,7 @@ with col2:
 
     if up:
         img = Image.open(up).convert("RGB")
-        st.image(img, caption="Foto yang diupload", use_container_width=True)
+        st.image(img, caption="Foto yang diupload")  # paling simpel
 
         label = analyze_food(img)
         st.success(f"Perkiraan jenis makanan: **{label}**")
