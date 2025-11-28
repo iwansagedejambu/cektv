@@ -1,4 +1,4 @@
-# app.py — cleaned & fixed single-file application
+# app.py — cleaned, fixed, and hardened single-file application
 import streamlit as st
 from PIL import Image
 import io
@@ -29,6 +29,7 @@ except Exception:
     def mean_squared_error(*a, **k): return None
     def mean_absolute_error(*a, **k): return None
     def r2_score(*a, **k): return None
+    def roc_auc_score(*a, **k): raise RuntimeError("roc_auc_score unavailable")
 
 try:
     import matplotlib.pyplot as plt
@@ -55,8 +56,12 @@ def show_missing_dependency_warnings():
 def auto_summary_classification(y_true, y_pred, y_proba=None):
     if not HAS_SKLEARN:
         return "Analisis metrik tidak tersedia (scikit-learn tidak terpasang)."
-    acc = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+    try:
+        acc = accuracy_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+    except Exception:
+        return "Gagal menghitung metrik (data tidak valid)."
+
     lines = [f"Akurasi: {acc:.3f}, F1: {f1:.3f}."]
     if acc < 0.7:
         lines.append("Performa rendah. Tidak layak untuk decision automation.")
@@ -64,15 +69,22 @@ def auto_summary_classification(y_true, y_pred, y_proba=None):
         lines.append("Performa sedang. Hanya cocok untuk rekomendasi.")
     else:
         lines.append("Performa kuat, cek bias & edge cases.")
-    distro = pd.Series(y_true).value_counts(normalize=True)
-    if distro.max() > 0.75:
-        lines.append(f"Class imbalance berat (kelas dominan: {distro.idxmax()}).")
+    try:
+        distro = pd.Series(y_true).value_counts(normalize=True)
+        if distro.max() > 0.75:
+            lines.append(f"Class imbalance berat (kelas dominan: {distro.idxmax()}).")
+    except Exception:
+        pass
+
     if y_proba is not None and HAS_SKLEARN:
         try:
             if getattr(y_proba, "ndim", 1) == 1 or (hasattr(y_proba, "shape") and y_proba.shape[1] == 2):
                 probs = y_proba[:,1] if getattr(y_proba, "ndim", 1) > 1 else y_proba
-                auc = roc_auc_score(y_true, probs)
-                lines.append(f"ROC-AUC: {auc:.3f}.")
+                try:
+                    auc = roc_auc_score(y_true, probs)
+                    lines.append(f"ROC-AUC: {auc:.3f}.")
+                except Exception:
+                    pass
         except Exception:
             pass
     return " ".join(lines)
@@ -80,8 +92,11 @@ def auto_summary_classification(y_true, y_pred, y_proba=None):
 def auto_summary_regression(y_true, y_pred):
     if not HAS_SKLEARN:
         return "Analisis metrik regresi tidak tersedia (scikit-learn tidak terpasang)."
-    r2 = r2_score(y_true, y_pred)
-    mae = mean_absolute_error(y_true, y_pred)
+    try:
+        r2 = r2_score(y_true, y_pred)
+        mae = mean_absolute_error(y_true, y_pred)
+    except Exception:
+        return "Gagal menghitung metrik regresi (data tidak valid)."
     lines = [f"R²: {r2:.3f}, MAE: {mae:.3f}"]
     if r2 < 0.3:
         lines.append("Model menjelaskan variasi sangat kecil.")
@@ -94,24 +109,33 @@ def auto_summary_regression(y_true, y_pred):
 def show_classification_analysis(y_true, y_pred, y_proba=None):
     st.subheader("Ringkasan metrik")
     if HAS_SKLEARN:
-        st.metric("Accuracy", f"{accuracy_score(y_true,y_pred):.3f}")
-        st.metric("F1", f"{f1_score(y_true,y_pred, average='weighted'):.3f}")
+        try:
+            st.metric("Accuracy", f"{accuracy_score(y_true,y_pred):.3f}")
+            st.metric("F1", f"{f1_score(y_true,y_pred, average='weighted'):.3f}")
+        except Exception:
+            st.write("Gagal menghitung metrik: input mungkin tidak valid.")
     else:
         st.write("Metrik tidak tersedia (scikit-learn tidak terpasang).")
     st.write(auto_summary_classification(y_true, y_pred, y_proba))
 
     if HAS_SKLEARN and HAS_MATPLOTLIB:
         st.subheader("Confusion Matrix")
-        cm = confusion_matrix(y_true, y_pred)
-        fig, ax = plt.subplots()
-        ax.imshow(cm, cmap="Greys")
-        for i in range(cm.shape[0]):
-            for j in range(cm.shape[1]):
-                ax.text(j, i, cm[i, j], ha="center", va="center", color="red")
-        st.pyplot(fig)
+        try:
+            cm = confusion_matrix(y_true, y_pred)
+            fig, ax = plt.subplots()
+            ax.imshow(cm, cmap="Greys")
+            for i in range(cm.shape[0]):
+                for j in range(cm.shape[1]):
+                    ax.text(j, i, int(cm[i, j]), ha="center", va="center", color="red")
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Gagal membuat confusion matrix: {e}")
 
         st.subheader("Classification Report")
-        st.text(classification_report(y_true, y_pred, zero_division=0))
+        try:
+            st.text(classification_report(y_true, y_pred, zero_division=0))
+        except Exception as e:
+            st.error(f"Gagal membuat classification report: {e}")
     else:
         if not HAS_SKLEARN:
             st.info("Confusion matrix / classification report dinonaktifkan karena scikit-learn tidak terpasang.")
@@ -121,19 +145,25 @@ def show_classification_analysis(y_true, y_pred, y_proba=None):
 def show_regression_analysis(y_true, y_pred):
     st.subheader("Ringkasan metrik")
     if HAS_SKLEARN:
-        st.metric("R²", f"{r2_score(y_true,y_pred):.3f}")
-        st.metric("MAE", f"{mean_absolute_error(y_true,y_pred):.3f}")
+        try:
+            st.metric("R²", f"{r2_score(y_true,y_pred):.3f}")
+            st.metric("MAE", f"{mean_absolute_error(y_true,y_pred):.3f}")
+        except Exception:
+            st.write("Gagal menghitung metrik regresi: input mungkin tidak valid.")
     else:
         st.write("Metrik regresi tidak tersedia (scikit-learn tidak terpasang).")
     st.write(auto_summary_regression(y_true, y_pred))
 
     if HAS_MATPLOTLIB and HAS_SKLEARN:
-        resid = np.array(y_true) - np.array(y_pred)
-        fig, ax = plt.subplots()
-        ax.scatter(y_pred, resid, alpha=0.5)
-        ax.axhline(0, color='k')
-        ax.set_xlabel("Prediksi"); ax.set_ylabel("Residual")
-        st.pyplot(fig)
+        try:
+            resid = np.array(y_true) - np.array(y_pred)
+            fig, ax = plt.subplots()
+            ax.scatter(y_pred, resid, alpha=0.5)
+            ax.axhline(0, color='k')
+            ax.set_xlabel("Prediksi"); ax.set_ylabel("Residual")
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Gagal membuat plot residual: {e}")
     else:
         st.info("Plot residual dinonaktifkan karena matplotlib / scikit-learn tidak terpasang.")
 
@@ -148,14 +178,17 @@ def run_analysis_section(task, y_true, y_pred, y_proba=None, model=None, X_test=
     if model is not None and X_test is not None:
         st.subheader("Feature analysis")
         if hasattr(model, "feature_importances_"):
-            fi = model.feature_importances_
-            feats = list(X_test.columns) if hasattr(X_test, "columns") else [f"f{i}" for i in range(len(fi))]
-            df_fi = pd.DataFrame({"feature": feats, "importance": fi}).sort_values("importance", ascending=False)
-            st.dataframe(df_fi)
-            if HAS_MATPLOTLIB:
-                fig, ax = plt.subplots()
-                df_fi.head(20).plot.barh(x="feature", y="importance", ax=ax, legend=False)
-                st.pyplot(fig)
+            try:
+                fi = model.feature_importances_
+                feats = list(X_test.columns) if hasattr(X_test, "columns") else [f"f{i}" for i in range(len(fi))]
+                df_fi = pd.DataFrame({"feature": feats, "importance": fi}).sort_values("importance", ascending=False)
+                st.dataframe(df_fi)
+                if HAS_MATPLOTLIB:
+                    fig, ax = plt.subplots()
+                    df_fi.head(20).plot.barh(x="feature", y="importance", ax=ax, legend=False)
+                    st.pyplot(fig)
+            except Exception as e:
+                st.error(f"Gagal menampilkan feature importances: {e}")
         else:
             st.write("Model tidak memiliki attribute feature_importances_. Coba SHAP atau permutation importance.")
 
@@ -166,11 +199,15 @@ def run_analysis_section(task, y_true, y_pred, y_proba=None, model=None, X_test=
                     sample = X_test.sample(n=min(500, len(X_test)), random_state=42) if isinstance(X_test, pd.DataFrame) else X_test
                     explainer = shap.Explainer(model, sample)
                     shap_vals = explainer(sample)
-                    st.set_option('deprecation.showPyplotGlobalUse', False)
+                    # draw SHAP summary plot into matplotlib figure and display safely
                     shap.summary_plot(shap_vals, sample, show=False)
-                    st.pyplot(bbox_inches='tight')
+                    if HAS_MATPLOTLIB:
+                        fig = plt.gcf()
+                        st.pyplot(fig)
+                    else:
+                        st.info("matplotlib tidak tersedia — tidak dapat menampilkan SHAP.")
                 except Exception as e:
-                    st.error(f"Error SHAP: {e}")
+                    st.error(f"Error saat membuat SHAP plot: {e}")
             else:
                 st.info("SHAP atau plotting tidak tersedia pada environment ini.")
 
@@ -272,7 +309,9 @@ def _median_brightness(gray_np, mask):
 def analyze_food_image_bytes(image_bytes: bytes, n_clusters=4):
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception:
+    except Exception as e:
+        # bubble up but provide context in logs
+        print("analyze_food_image_bytes: failed to decode image bytes:", e)
         raise
     return analyze_food_image(img, n_clusters=n_clusters)
 
