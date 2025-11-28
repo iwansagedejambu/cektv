@@ -1,12 +1,6 @@
-# timpa requirements.txt
-cat > requirements.txt <<'REQ'
 streamlit==1.26.0
 numpy==1.27.4
 pandas==2.2.2
 pillow==10.1.0
 requests==2.31.0
-REQ
-
-git add requirements.txt
-git commit -m "Pin minimal binary-friendly deps to avoid build errors"
-git push
+rich==14.2.0
