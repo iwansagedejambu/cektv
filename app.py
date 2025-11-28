@@ -1,29 +1,28 @@
 # app.py
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageFilter
 import io
-import hashlib
 import pandas as pd
 import numpy as np
 
 # ---------------------------
-# Nutrition DB (per 100g)
+# Database nutrisi (per 100 g)
 # ---------------------------
 FOOD_DB_PER_100G = {
-    "rice":      {"kcal": 130, "protein": 2.7, "fat": 0.3,  "carb": 28.0, "potassium": 26,  "phosphate": 43,  "calcium": 10},
-    "chicken":   {"kcal": 239, "protein": 27.0,"fat": 14.0, "carb": 0.0,  "potassium": 256, "phosphate": 200, "calcium": 15},
-    "egg":       {"kcal": 155, "protein": 13.0,"fat": 11.0, "carb": 1.1,  "potassium": 126, "phosphate": 198, "calcium": 50},
-    "tofu":      {"kcal": 76,  "protein": 8.0, "fat": 4.8,  "carb": 1.9,  "potassium": 121, "phosphate": 136, "calcium": 350},
-    "banana":    {"kcal": 89,  "protein": 1.1, "fat": 0.3,  "carb": 23.0, "potassium": 358, "phosphate": 22,  "calcium": 5},
-    "potato":    {"kcal": 77,  "protein": 2.0, "fat": 0.1,  "carb": 17.0, "potassium": 421, "phosphate": 57,  "calcium": 10},
-    "salmon":    {"kcal": 208, "protein": 20.4,"fat": 13.4, "carb": 0.0,  "potassium": 363, "phosphate": 252, "calcium": 9},
-    "mixed_salad":{"kcal":20,  "protein": 1.2, "fat": 0.2,  "carb": 3.6,  "potassium": 194, "phosphate": 30,  "calcium": 36},
+    "rice":       {"kcal":130, "protein":2.7, "fat":0.3, "carb":28.0, "potassium":26,  "phosphate":43,  "calcium":10},
+    "chicken":    {"kcal":239, "protein":27.0,"fat":14.0,"carb":0.0,  "potassium":256, "phosphate":200, "calcium":15},
+    "egg":        {"kcal":155, "protein":13.0,"fat":11.0,"carb":1.1,  "potassium":126, "phosphate":198, "calcium":50},
+    "tofu":       {"kcal":76,  "protein":8.0, "fat":4.8, "carb":1.9,  "potassium":121, "phosphate":136, "calcium":350},
+    "banana":     {"kcal":89,  "protein":1.1, "fat":0.3, "carb":23.0, "potassium":358, "phosphate":22,  "calcium":5},
+    "potato":     {"kcal":77,  "protein":2.0, "fat":0.1, "carb":17.0, "potassium":421, "phosphate":57,  "calcium":10},
+    "salmon":     {"kcal":208, "protein":20.4,"fat":13.4,"carb":0.0,  "potassium":363, "phosphate":252, "calcium":9},
+    "mixed_salad":{"kcal":20,  "protein":1.2, "fat":0.2, "carb":3.6,  "potassium":194, "phosphate":30,  "calcium":36},
 }
 EXTRA_LABELS = ["sweet_potato", "sauce", "unknown"]
 FOOD_KEYS = list(FOOD_DB_PER_100G.keys()) + EXTRA_LABELS
 
 # ---------------------------
-# Heuristic prototypes (RGB colors & edge expectation)
+# Heuristic prototypes (RGB color + edge expectation)
 # ---------------------------
 def _rgb_to_vec(rgb):
     return np.array(rgb, dtype=np.float32)
@@ -46,12 +45,9 @@ FOOD_PROTOTYPES = {
 }
 
 # ---------------------------
-# Pure-Pillow + NumPy analyzer (no cv2)
+# Utilities: simple sobel-like edge density (pure numpy)
 # ---------------------------
-from PIL import ImageFilter
-
 def _sobel_edge_density(pil_img_gray):
-    """Return normalized edge density (0..1) using simple sobel kernels on grayscale numpy array."""
     arr = np.array(pil_img_gray, dtype=np.float32)
     Kx = np.array([[-1,0,1],[-2,0,2],[-1,0,1]], dtype=np.float32)
     Ky = np.array([[1,2,1],[0,0,0],[-1,-2,-1]], dtype=np.float32)
@@ -65,44 +61,43 @@ def _sobel_edge_density(pil_img_gray):
             gx[i,j] = np.sum(region * Kx)
             gy[i,j] = np.sum(region * Ky)
     grad = np.hypot(gx, gy)
+    # threshold to get edges and compute density
     thr = np.percentile(grad, 70)
     edges = (grad > thr).astype(np.float32)
     return float(edges.mean())
 
+# ---------------------------
+# Pure-Pillow + NumPy heuristic analyzer
+# ---------------------------
 def analyze_food_image_cv_only(image: Image.Image, n_clusters=4):
-    """
-    Pure-Pillow + NumPy heuristic:
-    - quantize colors with PIL adaptive palette
-    - compute per-cluster area, avg color, and edge density proxy
-    - match clusters to FOOD_PROTOTYPES by color+edge heuristics
-    """
+    # resize for speed
     w, h = image.size
     max_side = 400
-    if max(w,h) > max_side:
-        scale = max_side / float(max(w,h))
-        new_size = (int(w*scale), int(h*scale))
-        img_small = image.resize(new_size, Image.LANCZOS)
+    if max(w, h) > max_side:
+        scale = max_side / float(max(w, h))
+        img_small = image.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
     else:
         img_small = image.copy()
     img_rgb = img_small.convert("RGB")
 
-    # quantize to n_clusters colors using adaptive palette
+    # quantize colors with PIL adaptive palette
     pal = img_rgb.convert("P", palette=Image.ADAPTIVE, colors=n_clusters).convert("RGB")
     pal_arr = np.array(pal)
     H, W = pal_arr.shape[:2]
     orig = np.array(img_rgb)
-    # collect palette colors from pal image
+
+    # extract palette colors from pal image (order: first-seen)
     palette_colors = []
     for y in range(H):
         for x in range(W):
-            c = tuple(int(v) for v in pal_arr[y,x])
+            c = tuple(int(v) for v in pal_arr[y, x])
             if c not in palette_colors:
                 palette_colors.append(c)
     while len(palette_colors) < n_clusters:
-        palette_colors.append((128,128,128))
+        palette_colors.append((128, 128, 128))
 
-    # assign pixels to nearest palette color (vectorized)
-    flat_orig = orig.reshape(-1,3).astype(np.float32)
+    # assign pixels to nearest palette color
+    flat_orig = orig.reshape(-1, 3).astype(np.float32)
     palette_arr = np.array(palette_colors, dtype=np.float32)
     dists = np.linalg.norm(flat_orig[:, None, :] - palette_arr[None, :, :], axis=2)
     labels = np.argmin(dists, axis=1).reshape(H, W)
@@ -117,17 +112,16 @@ def analyze_food_image_cv_only(image: Image.Image, n_clusters=4):
         if area == 0:
             continue
         avg_color = palette_colors[k]
-        # approximate local edge density using overall edge as proxy
-        local_edge = edge_density_full
+        local_edge = edge_density_full  # proxy (faster)
         masks.append({"mask": mask, "area": area, "edge": local_edge, "color": avg_color})
 
     if not masks:
-        return {"detected": [], "totals": {}, "img_shape": (h,w)}
+        return {"detected": [], "totals": {}, "img_shape": (h, w)}
 
     masks.sort(key=lambda x: x["area"], reverse=True)
     total_area = float(sum([m["area"] for m in masks])) + 1e-9
     detected = []
-    est_total_grams = 450.0
+    est_total_grams = 450.0  # heuristic for plate
 
     for m in masks:
         best = (None, 1e9)
@@ -160,7 +154,7 @@ def analyze_food_image_cv_only(image: Image.Image, n_clusters=4):
         for k in totals:
             totals[k] += d[k]
     detected.sort(key=lambda x: x["area_frac"], reverse=True)
-    return {"detected": detected, "totals": totals, "img_shape": (h,w)}
+    return {"detected": detected, "totals": totals, "img_shape": (h, w)}
 
 # ---------------------------
 # Kt/V calculator
@@ -178,7 +172,7 @@ def hitung_ktv(qb, durasi_jam, bb_kering):
 # Streamlit UI
 # ---------------------------
 st.set_page_config(page_title="Kt/V + Food Nutrition (prototype)", layout="wide")
-st.title("Hemodialysis Kt/V + Photo Nutrition (improved prototype)")
+st.title("Hemodialysis Kt/V + Photo Nutrition (prototype)")
 
 st.sidebar.header("Panduan singkat")
 st.sidebar.write("""
@@ -205,7 +199,7 @@ with col1:
             st.error("❌ Kt/V di bawah target (<1.4).")
     with st.expander("Penjelasan rumus dan asumsi"):
         st.markdown("""
-        **Rumus sederhana:** Kt/V = (Clearance × Waktu) / V
+        **Rumus sederhana:** Kt/V = (Clearance × Waktu) / V  
         Asumsi:
         - Clearance = 0.7 × Qb (mL/menit)
         - V = 0.55 × BB (kg) × 1000 (mL)
@@ -213,10 +207,10 @@ with col1:
         """)
 
 with col2:
-    st.header("📸 Analisis Gizi dari Foto Makanan — Improved")
-    st.markdown("Unggah foto (jpg/png). Sistem akan mendeteksi beberapa komponen & hitung nutrisi. Koreksi manual disarankan.")
-    uploaded = st.file_uploader("Unggah foto makanan", type=["jpg","jpeg","png"], accept_multiple_files=False)
+    st.header("📸 Analisis Gizi dari Foto Makanan — Improved (no cv2)")
+    st.markdown("Unggah foto (jpg/png). Sistem akan mendeteksi komponen & hitung nutrisi (heuristic). Koreksi manual disarankan.")
 
+    uploaded = st.file_uploader("Unggah foto makanan", type=["jpg","jpeg","png"], accept_multiple_files=False)
     if uploaded is not None:
         try:
             image = Image.open(uploaded).convert("RGB")
@@ -240,7 +234,9 @@ with col2:
                     st.markdown(f"**Item #{i+1} (area fraction {d['area_frac']:.2f})**")
                     cols = st.columns([2,1,1,1])
                     label_options = FOOD_KEYS
-                    sel_label = cols[0].selectbox(f"Label #{i+1}", options=label_options, index=label_options.index(d["label"]) if d["label"] in label_options else len(label_options)-1, key=f"label_{i}")
+                    sel_label = cols[0].selectbox(f"Label #{i+1}", options=label_options,
+                                                  index=label_options.index(d["label"]) if d["label"] in label_options else len(label_options)-1,
+                                                  key=f"label_{i}")
                     portion = cols[1].number_input(f"Porsi (g) #{i+1}", min_value=10, max_value=2000, value=int(d["portion_g"]), step=10, key=f"portion_{i}")
                     kcal = cols[2].number_input(f"Energi (kcal) #{i+1}", min_value=0.0, value=float(d["kcal"]), step=0.1, key=f"kcal_{i}")
                     pot = cols[3].number_input(f"K (mg) #{i+1}", min_value=0.0, value=float(d["potassium_mg"]), step=1.0, key=f"pot_{i}")
