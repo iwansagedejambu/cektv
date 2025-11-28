@@ -1,3 +1,4 @@
+# app.py — cleaned & fixed single-file application
 import streamlit as st
 from PIL import Image
 import io
@@ -5,7 +6,6 @@ import hashlib
 import numpy as np
 import pandas as pd
 import math
-import typing
 
 # ---------------------------
 # Safe / lazy imports for heavy deps
@@ -22,7 +22,6 @@ try:
     )
 except Exception:
     HAS_SKLEARN = False
-    # lightweight fallbacks to avoid NameError — actual logic checks HAS_SKLEARN before using
     def accuracy_score(*a, **k): return None
     def f1_score(*a, **k): return None
     def confusion_matrix(*a, **k): return None
@@ -36,7 +35,6 @@ try:
 except Exception:
     HAS_MATPLOTLIB = False
 
-# shap is optional and heavy — try import but tolerate failure
 try:
     import shap
 except Exception:
@@ -54,8 +52,6 @@ def show_missing_dependency_warnings():
 # ==============================
 # 🔥 ANALYSIS MODULE (INLINED)
 # ==============================
-# Auto summaries, visualizations, and run_analysis_section
-
 def auto_summary_classification(y_true, y_pred, y_proba=None):
     if not HAS_SKLEARN:
         return "Analisis metrik tidak tersedia (scikit-learn tidak terpasang)."
@@ -109,7 +105,6 @@ def show_classification_analysis(y_true, y_pred, y_proba=None):
         cm = confusion_matrix(y_true, y_pred)
         fig, ax = plt.subplots()
         ax.imshow(cm, cmap="Greys")
-        # annotate
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 ax.text(j, i, cm[i, j], ha="center", va="center", color="red")
@@ -143,13 +138,6 @@ def show_regression_analysis(y_true, y_pred):
         st.info("Plot residual dinonaktifkan karena matplotlib / scikit-learn tidak terpasang.")
 
 def run_analysis_section(task, y_true, y_pred, y_proba=None, model=None, X_test=None, df=None, cohort_cols=None):
-    """
-    task: 'classification' or 'regression'
-    y_true, y_pred: array-like
-    y_proba: optional probabilities for classification
-    model/X_test: optional for feature importance / SHAP
-    df/cohort_cols: optional for cohort analysis
-    """
     st.header("Analysis hasil model")
     if task == 'classification':
         show_classification_analysis(y_true, y_pred, y_proba)
@@ -171,18 +159,20 @@ def run_analysis_section(task, y_true, y_pred, y_proba=None, model=None, X_test=
         else:
             st.write("Model tidak memiliki attribute feature_importances_. Coba SHAP atau permutation importance.")
 
-        if st.checkbox("Tampilkan SHAP (mahal compute)") and HAS_SHAP and HAS_MATPLOTLIB:
-            try:
-                sample = X_test.sample(n=min(500, len(X_test)), random_state=42) if isinstance(X_test, pd.DataFrame) else X_test
-                explainer = shap.Explainer(model, sample)
-                shap_vals = explainer(sample)
-                st.set_option('deprecation.showPyplotGlobalUse', False)
-                shap.summary_plot(shap_vals, sample, show=False)
-                st.pyplot(bbox_inches='tight')
-            except Exception as e:
-                st.error(f"Error SHAP: {e}")
-        elif st.checkbox("Tampilkan SHAP (mahal compute)"):
-            st.info("SHAP atau plotting tidak tersedia pada environment ini.")
+        show_shap = st.checkbox("Tampilkan SHAP (mahal compute)")
+        if show_shap:
+            if HAS_SHAP and HAS_MATPLOTLIB:
+                try:
+                    sample = X_test.sample(n=min(500, len(X_test)), random_state=42) if isinstance(X_test, pd.DataFrame) else X_test
+                    explainer = shap.Explainer(model, sample)
+                    shap_vals = explainer(sample)
+                    st.set_option('deprecation.showPyplotGlobalUse', False)
+                    shap.summary_plot(shap_vals, sample, show=False)
+                    st.pyplot(bbox_inches='tight')
+                except Exception as e:
+                    st.error(f"Error SHAP: {e}")
+            else:
+                st.info("SHAP atau plotting tidak tersedia pada environment ini.")
 
     # cohort analysis (requires df)
     if df is not None and cohort_cols:
@@ -202,7 +192,6 @@ def run_analysis_section(task, y_true, y_pred, y_proba=None, model=None, X_test=
 # ============================
 # SISA APP KAMU (Kt/V + Foto makanan)
 # ============================
-# Config / DB kecil nutrisi
 FOOD_DB_PER_100G = {
     "rice":       {"kcal":130, "protein":2.7, "fat":0.3, "carb":28.0, "potassium":26,  "phosphate":43,  "calcium":10},
     "chicken":    {"kcal":239, "protein":27.0,"fat":14.0,"carb":0.0,  "potassium":256, "phosphate":200, "calcium":15},
@@ -218,7 +207,6 @@ FOOD_DB_PER_100G = {
 }
 FOOD_KEYS = list(FOOD_DB_PER_100G.keys())
 
-# Prototypes
 PROTOTYPES = {
     "rice":        {"rgb": (245,245,240), "tex": 0.03},
     "chicken":     {"rgb": (220,180,150), "tex": 0.08},
@@ -233,7 +221,6 @@ PROTOTYPES = {
     "unknown":     {"rgb": (128,128,128), "tex": 0.05},
 }
 
-# Utilities
 def _rgb_dist(a, b):
     return math.sqrt(sum((float(a[i]) - float(b[i]))**2 for i in range(3)))
 
@@ -246,7 +233,6 @@ def _image_to_np(img: Image.Image, max_side=500):
 
 def _quantize_colors(img_np, k=4):
     pixels = img_np.reshape(-1, 3).astype(np.float32)
-    # initialize centers using percentiles
     centers = []
     N = len(pixels)
     for p in np.linspace(0, 100, k+2)[1:-1]:
@@ -282,16 +268,18 @@ def _median_brightness(gray_np, mask):
     if sel.size == 0: return 0.0
     return float(np.median(sel)/255.0)
 
-# Cache analyze to avoid recompute for same bytes
 @st.cache_data(show_spinner=False)
 def analyze_food_image_bytes(image_bytes: bytes, n_clusters=4):
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception:
+        raise
     return analyze_food_image(img, n_clusters=n_clusters)
 
 def analyze_food_image(image: Image.Image, n_clusters=4):
     img_np = _image_to_np(image, max_side=500)
     H,W,_ = img_np.shape
-    gray = np.array(image.convert("L").resize((W,H)))  # align sizes
+    gray = np.array(image.convert("L").resize((W,H)))
 
     centers, label_map = _quantize_colors(img_np, k=n_clusters)
     masks = []
@@ -311,7 +299,7 @@ def analyze_food_image(image: Image.Image, n_clusters=4):
         return {"detected": [], "totals": {}, "img_shape": (H,W)}
 
     detected = []
-    est_total_grams = 450.0  # heuristic plate mass
+    est_total_grams = 450.0
     for m in sorted(masks, key=lambda x: x["area"], reverse=True):
         best = None
         best_score = 1e9
@@ -349,7 +337,6 @@ def analyze_food_image(image: Image.Image, n_clusters=4):
 
     return {"detected": detected, "totals": totals, "img_shape": (H,W)}
 
-# Kt/V calculator + Pernefri notes
 def hitung_ktv(qb, durasi_jam, bb_kering):
     clearance = 0.7 * qb
     waktu_menit = durasi_jam * 60.0
@@ -401,7 +388,6 @@ st.sidebar.write("""
 
 left, right = st.columns([1,1])
 
-# Left: Kt/V
 with left:
     st.header("💉 Kalkulator Kt/V")
     qb = st.number_input("Laju Aliran Darah (Qb) — mL/menit", min_value=50, max_value=800, value=220, step=10)
@@ -418,7 +404,6 @@ with left:
             for a in note["advice"]:
                 st.write("- " + a)
 
-# Right: Food photo
 with right:
     st.header("📸 Analisis Foto Makanan (Heuristic)")
     st.markdown("Unggah foto (jpg/png). Sistem akan menampilkan deteksi per-klaster, skor kecocokan, dan memungkinkan koreksi.")
@@ -433,11 +418,16 @@ with right:
 
         if image is not None:
             st.info("Menganalisis... (heuristic)")
-            # use cached version that keys on bytes
+            # use cached version that keys on bytes, fallback to direct image
+            analysis = None
             try:
-                image_bytes = uploaded.getvalue()
-                analysis = analyze_food_image_bytes(image_bytes, n_clusters=4)
+                if hasattr(uploaded, "getvalue"):
+                    image_bytes = uploaded.getvalue()
+                    analysis = analyze_food_image_bytes(image_bytes, n_clusters=4)
             except Exception:
+                analysis = None
+
+            if analysis is None:
                 analysis = analyze_food_image(image, n_clusters=4)
 
             detected = analysis.get("detected", [])
@@ -451,7 +441,6 @@ with right:
                 for i,d in enumerate(detected):
                     st.markdown(f"**Item #{i+1}** — tebakan: **{d['label']}** (area {d['area_frac']:.2%})")
                     cols = st.columns([2,1,1,1,1])
-                    # show small color swatch
                     cols[0].markdown(f"<div style='width:36px;height:18px;background:rgb{tuple(d['color'])};border:1px solid #444'></div>", unsafe_allow_html=True)
                     label_opt = FOOD_KEYS
                     sel_label = cols[0].selectbox(f"Label #{i+1}", options=label_opt, index=label_opt.index(d['label']) if d['label'] in label_opt else 0, key=f"label_{i}")
@@ -520,7 +509,6 @@ with right:
 st.markdown("---")
 st.caption("⚠ Prototype: heuristic. Untuk akurasi tinggi butuh model ML atau Vision API. Gunakan koreksi manual untuk hasil klinis.")
 
-# Developer: quick access to analysis module
 with st.expander("Developer: Run analysis module (demo)"):
     st.write("Jika kamu punya model/prediksi, module analysis akan menampilkan metrik, confusion matrix, dan SHAP.")
     st.write("Di sini demo cepat menggunakan synthetic data agar kamu lihat layoutnya.")
