@@ -212,12 +212,35 @@ def add_food(label, grams):
 # =====================================
 c1, c2 = st.columns([1,1])
 
-# ---- KALKULATOR Kt/V ----
 with c1:
     st.header("💉 Kalkulator Kt/V")
-    qb = st.number_input("Qb (mL/menit)", 250, 10)
-    dur = st.number_input("Durasi (jam)", 4.0, 0.25)
-    bb  = st.number_input("BB kering (kg)", 50.0, 1.0)
+
+    qb = st.number_input(
+        "Qb (mL/menit)",
+        min_value=50,
+        max_value=500,
+        value=250,
+        step=10,
+        key="qb_input",
+    )
+
+    dur = st.number_input(
+        "Durasi (jam)",
+        min_value=1.0,
+        max_value=8.0,
+        value=4.0,
+        step=0.25,
+        key="dur_input",
+    )
+
+    bb = st.number_input(
+        "BB kering (kg)",
+        min_value=20.0,
+        max_value=150.0,
+        value=50.0,
+        step=0.5,
+        key="bb_input",
+    )
 
     if st.button("Hitung Kt/V", key="btn_ktv"):
         ktv = hitung_ktv(qb, dur, bb)
@@ -228,6 +251,7 @@ with c1:
             st.warning("Rekomendasi:")
             for a in adv:
                 st.write("•", a)
+
 
 # ---- UPLOAD & ANALISIS FOTO MAKANAN ----
 with c2:
