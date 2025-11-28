@@ -44,31 +44,108 @@ def pernefri_note(ktv):
             "Periksa kembali akses vaskular"
         ]
 
-# ============ USDA TRACKER SEMENTARA (DUMMY) ============
 @st.cache_data
 def load_usda_simple():
-    return pd.DataFrame()
+    """
+    Gabung 3 file:
+      - data/food.csv           -> fdc_id, description
+      - data/nutrient.csv       -> id, name, unit_name
+      - data/food_nutrient.csv  -> fdc_id, nutrient_id, amount
+
+    Output: df dengan kolom:
+      [fdc_id, description, kcal, protein, fat, carb, k, p, ca]
+    """
+    try:
+        food = pd.read_csv("data/food.csv", usecols=["fdc_id", "description"])
+        nutrient = pd.read_csv("data/nutrient.csv", usecols=["id", "name", "unit_name"])
+        food_nutrient = pd.read_csv(
+            "data/food_nutrient.csv",
+            usecols=["fdc_id", "nutrient_id", "amount"]
+        )
+    except Exception as e:
+        st.error(f"Gagal membaca file USDA: {e}")
+        return pd.DataFrame()
+
+    # nutrisi yang kita butuh
+    target_names = {
+        "Energy": "kcal",
+        "Protein": "protein",
+        "Total lipid (fat)": "fat",
+        "Carbohydrate, by difference": "carb",
+        "Potassium, K": "k",
+        "Phosphorus, P": "p",
+        "Calcium, Ca": "ca",
+    }
+
+    nutr_filt = nutrient[nutrient["name"].isin(target_names.keys())]
+    fn_filt = food_nutrient[
+        food_nutrient["nutrient_id"].isin(nutr_filt["id"])
+    ]
+
+    merged = fn_filt.merge(
+        nutr_filt,
+        left_on="nutrient_id",
+        right_on="id",
+        how="left"
+    )
+
+    merged = merged.merge(
+        food,
+        on="fdc_id",
+        how="left"
+    )
+
+    pivot = merged.pivot_table(
+        index=["fdc_id", "description"],
+        columns="name",
+        values="amount",
+        aggfunc="mean"
+    )
+
+    pivot = pivot.rename(columns=target_names).reset_index()
+
+    return pivot
+
 
 USDA_DF = load_usda_simple()
 
-def get_nutrition_from_usda_by_desc(desc: str, grams: float):
+# mapping label Indonesia / sederhana -> keyword dalam kolom "description" USDA
+LABEL_TO_USDA_KEYWORD = {
+    "Nasi": "rice, white, cooked",
+    "Ayam": "chicken, breast, roasted",
+    "Rendang": "beef, stew",
+    "Sayur": "spinach, cooked",
+    # kalau langsung pakai label inggris dari model HF, biarkan saja
+}
+
+def get_nutrition_from_usda_by_desc(label_or_desc: str, grams: float):
     if USDA_DF.empty:
         return None
-    df = USDA_DF[USDA_DF["description"].str.contains(desc, case=False, na=False)]
+
+    # kalau label Indonesia / sederhana, ubah dulu ke keyword USDA
+    keyword = LABEL_TO_USDA_KEYWORD.get(label_or_desc, label_or_desc)
+    if not keyword:
+        return None
+
+    df = USDA_DF[
+        USDA_DF["description"].str.contains(keyword, case=False, na=False)
+    ]
     if df.empty:
         return None
+
     row = df.iloc[0]
     factor = grams / 100.0
     return {
         "description": row["description"],
-        "kcal": round(row["kcal"] * factor, 1),
-        "protein": round(row["protein"] * factor, 1),
-        "fat": round(row["fat"] * factor, 1),
-        "carb": round(row["carb"] * factor, 1),
-        "k": round(row["k"] * factor, 1),
-        "p": round(row["p"] * factor, 1),
-        "ca": round(row["ca"] * factor, 1),
+        "kcal": round(row.get("kcal", 0) * factor, 1),
+        "protein": round(row.get("protein", 0) * factor, 1),
+        "fat": round(row.get("fat", 0) * factor, 1),
+        "carb": round(row.get("carb", 0) * factor, 1),
+        "k": round(row.get("k", 0) * factor, 1),
+        "p": round(row.get("p", 0) * factor, 1),
+        "ca": round(row.get("ca", 0) * factor, 1),
     }
+
 
 # ============ AI FOOD PREDICTION LEWAT API HF ============
 def ai_food_predict(img: Image.Image):
