@@ -5,17 +5,28 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from huggingface_hub import InferenceClient
+import os  # <--- TAMBAH INI
 
 # ============ CONFIG HALAMAN ============
 st.set_page_config(page_title="Kt/V & Food Tracker (AI)", layout="wide")
 
-# ====== LOAD API KEY HUGGING FACE DARI STREAMLIT SECRETS ======
-if "HF_TOKEN" not in st.secrets:
-    st.error("HF API Key belum diset di secrets (HF_TOKEN)!")
+# ====== LOAD API KEY HUGGING FACE DARI SECRETS / ENV ======
+HF_TOKEN = None
+
+# 1) coba ambil dari st.secrets
+if "HF_TOKEN" in st.secrets:
+    HF_TOKEN = st.secrets["HF_TOKEN"]
+
+# 2) kalau belum ada, coba dari environment variable
+if HF_TOKEN is None:
+    HF_TOKEN = os.environ.get("HF_TOKEN")
+
+if not HF_TOKEN:
+    st.error("HF API Key belum diset. Tambahkan HF_TOKEN di Secrets **atau** Environment Variables.")
     st.stop()
 
-HF_TOKEN = st.secrets["HF_TOKEN"]
 client = InferenceClient(token=HF_TOKEN)
+
 
 
 # ============ KALKULATOR Kt/V ============
