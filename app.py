@@ -10,12 +10,13 @@ from huggingface_hub import InferenceClient
 st.set_page_config(page_title="Kt/V & Food Tracker (AI)", layout="wide")
 
 # ====== LOAD API KEY HUGGING FACE DARI STREAMLIT SECRETS ======
-try:
-    HF_TOKEN = st.secrets["default"]["HF_TOKEN"]
-    client = InferenceClient(token=HF_TOKEN)
-except Exception:
-    st.error("HF API Key belum diset di secrets!")
+if "HF_TOKEN" not in st.secrets:
+    st.error("HF API Key belum diset di secrets (HF_TOKEN)!")
     st.stop()
+
+HF_TOKEN = st.secrets["HF_TOKEN"]
+client = InferenceClient(token=HF_TOKEN)
+
 
 # ============ KALKULATOR Kt/V ============
 def hitung_ktv(qb, durasi_jam, bb_kering):
