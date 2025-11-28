@@ -1,67 +1,344 @@
+# app.py
 import streamlit as st
-from PIL import Image
-import io, hashlib
+from PIL import Image, ImageFilter, ImageStat
+import io
+import hashlib
+import numpy as np
+import pandas as pd
+import math
 
-# Database nutrisi mini per 100 g (tanpa numpy / pandas)
-FOOD_DB = {
-    "rice":  {"kcal":130,"protein":2.7,"fat":0.3,"carb":28},
-    "chicken":{"kcal":239,"protein":27,"fat":14,"carb":0},
-    "egg":   {"kcal":155,"protein":13,"fat":11,"carb":1},
-    "tofu":  {"kcal":76,"protein":8,"fat":5,"carb":2},
-    "banana":{"kcal":89,"protein":1,"fat":0,"carb":23},
-    "unknown":{"kcal":100,"protein":3,"fat":5,"carb":12},
+# ---------------------------
+# Config / DB kecil nutrisi
+# ---------------------------
+FOOD_DB_PER_100G = {
+    "rice":       {"kcal":130, "protein":2.7, "fat":0.3, "carb":28.0, "potassium":26,  "phosphate":43,  "calcium":10},
+    "chicken":    {"kcal":239, "protein":27.0,"fat":14.0,"carb":0.0,  "potassium":256, "phosphate":200, "calcium":15},
+    "egg":        {"kcal":155, "protein":13.0,"fat":11.0,"carb":1.1,  "potassium":126, "phosphate":198, "calcium":50},
+    "tofu":       {"kcal":76,  "protein":8.0, "fat":4.8, "carb":1.9,  "potassium":121, "phosphate":136, "calcium":350},
+    "banana":     {"kcal":89,  "protein":1.1, "fat":0.3, "carb":23.0, "potassium":358, "phosphate":22,  "calcium":5},
+    "potato":     {"kcal":77,  "protein":2.0, "fat":0.1, "carb":17.0, "potassium":421, "phosphate":57,  "calcium":10},
+    "salmon":     {"kcal":208, "protein":20.4,"fat":13.4,"carb":0.0,  "potassium":363, "phosphate":252, "calcium":9},
+    "mixed_salad":{"kcal":20,  "protein":1.2, "fat":0.2, "carb":3.6,  "potassium":194, "phosphate":30,  "calcium":36},
+    "sauce":      {"kcal":120, "protein":2.0, "fat":6.0, "carb":12.0, "potassium":50, "phosphate":30, "calcium":10},
+    "sweet_potato":{"kcal":86, "protein":1.6, "fat":0.1, "carb":20.1,"potassium":337,"phosphate":47,"calcium":30},
+    "unknown":    {"kcal":100, "protein":3.0, "fat":5.0, "carb":12.0, "potassium":50, "phosphate":40, "calcium":20},
 }
-FOOD_KEYS = list(FOOD_DB.keys())
+EXTRA_LABELS = ["unknown"]
+FOOD_KEYS = list(FOOD_DB_PER_100G.keys())
 
-def simple_hash_predict(image_bytes):
-    """Mengubah hash gambar → label makanan (sederhana tapi stabil)."""
-    h = hashlib.sha256(image_bytes).hexdigest()
-    idx = int(h[:8], 16) % len(FOOD_KEYS)
-    return FOOD_KEYS[idx]
+# ---------------------------
+# Heuristic prototypes (RGB + texture expectation)
+# ---------------------------
+PROTOTYPES = {
+    "rice":        {"rgb": (245,245,240), "tex": 0.03},
+    "chicken":     {"rgb": (220,180,150), "tex": 0.08},
+    "egg":         {"rgb": (250,230,140), "tex": 0.06},
+    "tofu":        {"rgb": (245,245,235), "tex": 0.02},
+    "banana":      {"rgb": (240,210,60),  "tex": 0.03},
+    "potato":      {"rgb": (210,160,100), "tex": 0.05},
+    "salmon":      {"rgb": (230,120,120), "tex": 0.09},
+    "mixed_salad": {"rgb": (80,150,80),   "tex": 0.04},
+    "sauce":       {"rgb": (90,45,30),    "tex": 0.01},
+    "sweet_potato":{"rgb": (235,120,50),  "tex": 0.04},
+    "unknown":     {"rgb": (128,128,128), "tex": 0.05},
+}
 
-def analyze_image(image):
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    img_bytes = buf.getvalue()
-    label = simple_hash_predict(img_bytes)
-    portion = 150
-    per = FOOD_DB[label]
-    return {
-        "label": label,
-        "portion": portion,
-        "kcal": round(per["kcal"] * (portion/100),1),
-        "protein": round(per["protein"] * (portion/100),1),
-        "fat": round(per["fat"] * (portion/100),1),
-        "carb": round(per["carb"] * (portion/100),1),
-    }
+# ---------------------------
+# Utilities
+# ---------------------------
+def _rgb_dist(a, b):
+    return math.sqrt(sum((float(a[i]) - float(b[i]))**2 for i in range(3)))
 
-def hitung_ktv(qb, durasi, bb):
+def _image_to_np(img: Image.Image, max_side=500):
+    w,h = img.size
+    if max(w,h) > max_side:
+        scale = max_side / float(max(w,h))
+        img = img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
+    return np.array(img.convert("RGB"))
+
+def _quantize_colors(img_np, k=4):
+    """Simple k-means like quantization using numpy (fast-ish): return centers and label map."""
+    pixels = img_np.reshape(-1, 3).astype(np.float32)
+    # initialize centers using percentiles
+    centers = []
+    for p in np.linspace(0, 100, k+2)[1:-1]:
+        idx = int(len(pixels) * (p/100.0))
+        centers.append(pixels[idx])
+    centers = np.array(centers, dtype=np.float32)
+    # simple iterative refinement (few iters)
+    for _ in range(8):
+        # distances (Npix x k)
+        d = np.linalg.norm(pixels[:, None, :] - centers[None, :, :], axis=2)
+        labels = np.argmin(d, axis=1)
+        new_centers = []
+        changed = False
+        for i in range(k):
+            sel = pixels[labels == i]
+            if len(sel) == 0:
+                new_centers.append(centers[i])
+            else:
+                new_centers.append(sel.mean(axis=0))
+        new_centers = np.array(new_centers)
+        if np.allclose(new_centers, centers, atol=1.0):
+            break
+        centers = new_centers
+    label_map = labels.reshape(img_np.shape[0], img_np.shape[1])
+    centers = centers.astype(np.uint8)
+    return centers, label_map
+
+def _local_texture_score(gray_np, mask):
+    """Compute local texture as normalized stddev within masked pixels (0..1)."""
+    sel = gray_np[mask]
+    if sel.size == 0:
+        return 0.0
+    return float(np.std(sel) / (np.mean(sel)+1e-6))
+
+def _median_brightness(gray_np, mask):
+    sel = gray_np[mask]
+    if sel.size == 0: return 0.0
+    return float(np.median(sel)/255.0)
+
+# ---------------------------
+# Analyzer (main heuristic)
+# ---------------------------
+def analyze_food_image(image: Image.Image, n_clusters=4):
+    """
+    Steps:
+    - resize -> numpy
+    - quantize colors into clusters
+    - for each cluster compute area fraction, avg color, texture score (std/mean), median brightness
+    - match cluster to PROTOTYPES by combined score (color + texture + brightness)
+    - build detected list and totals
+    """
+    img_np = _image_to_np(image, max_side=500)
+    H,W,_ = img_np.shape
+    gray = np.array(image.convert("L").resize((W,H)))  # align sizes
+
+    centers, label_map = _quantize_colors(img_np, k=n_clusters)
+    masks = []
+    total_pixels = float(H*W)
+
+    for i, c in enumerate(centers):
+        mask = (label_map == i)
+        area = float(mask.sum())
+        if area < 50:  # ignore tiny specks
+            continue
+        avg_color = tuple(int(x) for x in c.tolist())
+        tex = _local_texture_score(gray, mask)
+        bright = _median_brightness(gray, mask)
+        masks.append({"idx": i, "area": area, "area_frac": area/total_pixels, "color": avg_color, "tex": tex, "bright": bright})
+
+    if not masks:
+        return {"detected": [], "totals": {}, "img_shape": (H,W)}
+
+    # match to prototypes with scoring weights tuned
+    detected = []
+    est_total_grams = 450.0  # heuristic plate mass
+    for m in sorted(masks, key=lambda x: x["area"], reverse=True):
+        best = None
+        best_score = 1e9
+        for name, proto in PROTOTYPES.items():
+            color_score = _rgb_dist(m["color"], proto["rgb"])
+            tex_score = abs(m["tex"] - proto["tex"]) * 200.0
+            # brightness penalty to differentiate dark sauce vs protein
+            bright_score = abs(m["bright"] - 0.5) * 10.0 if name == "sauce" else 0.0
+            score = color_score + tex_score + bright_score
+            if score < best_score:
+                best_score = score
+                best = name
+        portion_g = max(20, int(est_total_grams * m["area_frac"]))
+        per100 = FOOD_DB_PER_100G.get(best, FOOD_DB_PER_100G["unknown"])
+        factor = portion_g / 100.0
+        detected.append({
+            "label": best,
+            "portion_g": portion_g,
+            "kcal": round(per100["kcal"] * factor, 1),
+            "protein_g": round(per100["protein"] * factor, 1),
+            "fat_g": round(per100["fat"] * factor, 1),
+            "carb_g": round(per100["carb"] * factor, 1),
+            "potassium_mg": round(per100["potassium"] * factor, 1),
+            "phosphate_mg": round(per100["phosphate"] * factor, 1),
+            "calcium_mg": round(per100["calcium"] * factor, 1),
+            "area_frac": m["area_frac"],
+            "color": m["color"],
+            "tex": m["tex"],
+            "match_score": round(best_score, 2)
+        })
+
+    # aggregate totals
+    totals = {"kcal":0,"protein_g":0,"fat_g":0,"carb_g":0,"potassium_mg":0,"phosphate_mg":0,"calcium_mg":0}
+    for d in detected:
+        for k in totals:
+            totals[k] += d[k]
+
+    return {"detected": detected, "totals": totals, "img_shape": (H,W)}
+
+# ---------------------------
+# Kt/V calculator + Pernefri notes
+# ---------------------------
+def hitung_ktv(qb, durasi_jam, bb_kering):
     clearance = 0.7 * qb
-    waktu_menit = durasi * 60
-    v = 0.55 * bb * 1000
-    if v <= 0: return 0
-    return round((clearance * waktu_menit) / v, 2)
+    waktu_menit = durasi_jam * 60.0
+    v = 0.55 * bb_kering * 1000.0
+    if v <= 0:
+        return 0.0
+    ktv = (clearance * waktu_menit) / v
+    return round(ktv, 2)
 
-st.title("Kt/V + Analisis Foto Ultra-Ringan")
+def pernefri_note(ktv):
+    note = {"level": None, "message": [], "advice": []}
+    if ktv >= 1.8:
+        note["level"] = "Excellent"
+        note["message"] = ["Kt/V sangat baik (≥1.8)."]
+    elif 1.7 <= ktv < 1.8:
+        note["level"] = "Adequate"
+        note["message"] = ["Kt/V mencapai target (1.7–1.79)."]
+    elif 1.4 <= ktv < 1.7:
+        note["level"] = "Borderline"
+        note["message"] = ["Kt/V borderline; perlu evaluasi lebih lanjut."]
+        note["advice"] = [
+            "Pertimbangkan menambah durasi dialisis 30–60 menit.",
+            "Tinjau akses vaskular dan aliran (Qb).",
+            "Evaluasi recirculation dan efisiensi dialyzer."
+        ]
+    else:
+        note["level"] = "Inadequate"
+        note["message"] = ["Kt/V di bawah target (<1.4)."]
+        note["advice"] = [
+            "Tambah waktu dialisis 30–90 menit tergantung toleransi.",
+            "Tingkatkan Qb jika akses memungkinkan (target 250–300 mL/menit).",
+            "Pertimbangkan penilaian ulang akses vaskular (fistula/graft).",
+            "Diskusikan perubahan protokol dengan nephrologist."
+        ]
+    return note
 
-st.header("Kalkulator Kt/V")
-qb = st.number_input("Qb (mL/menit)", value=200)
-bb = st.number_input("Berat badan kering (kg)", value=50.0)
-dur = st.number_input("Durasi (jam)", value=4.0)
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(page_title="Kt/V + Food Photo (heuristic)", layout="wide")
+st.title("Kt/V + Food Photo — Heuristic (no API)")
 
-if st.button("Hitung Kt/V"):
-    ktv = hitung_ktv(qb, dur, bb)
-    st.subheader(f"KTV = {ktv}")
+st.sidebar.header("Panduan singkat")
+st.sidebar.write("""
+- Analisis foto: heuristic segmen warna + tekstur. Koreksi manual disarankan.
+- Untuk akurasi klinis, gunakan model terlatih atau layanan Vision API.
+""")
+
+left, right = st.columns([1,1])
+
+# Left: Kt/V
+with left:
+    st.header("💉 Kalkulator Kt/V")
+    qb = st.number_input("Laju Aliran Darah (Qb) — mL/menit", min_value=50, max_value=800, value=220, step=10)
+    bb_kering = st.number_input("Berat Badan Kering (kg)", min_value=20.0, max_value=200.0, value=48.5, step=0.1)
+    durasi_jam = st.number_input("Durasi Dialisis (jam)", min_value=0.5, max_value=12.0, value=4.0, step=0.25)
+    if st.button("Hitung Kt/V"):
+        ktv = hitung_ktv(qb, durasi_jam, bb_kering)
+        st.subheader(f"Hasil Kt/V: **{ktv}**")
+        note = pernefri_note(ktv)
+        for line in note["message"]:
+            st.info(line)
+        if note["advice"]:
+            st.markdown("**Rekomendasi:**")
+            for a in note["advice"]:
+                st.write("- " + a)
+
+# Right: Food photo
+with right:
+    st.header("📸 Analisis Foto Makanan (Heuristic)")
+    st.markdown("Unggah foto (jpg/png). Sistem akan menampilkan deteksi per-klaster, skor kecocokan, dan memungkinkan koreksi.")
+    uploaded = st.file_uploader("Unggah foto makanan", type=["jpg","jpeg","png"])
+    if uploaded is not None:
+        try:
+            image = Image.open(uploaded).convert("RGB")
+            st.image(image, caption="Preview", use_container_width=True)
+        except Exception as e:
+            st.error(f"Gagal membuka gambar: {e}")
+            image = None
+
+        if image is not None:
+            st.info("Menganalisis... (heuristic)")
+            analysis = analyze_food_image(image, n_clusters=4)
+            detected = analysis.get("detected", [])
+            totals = analysis.get("totals", {})
+
+            if not detected:
+                st.warning("Tidak terdeteksi item — coba foto lain (lebih terang/kontras).")
+            else:
+                st.markdown("### Deteksi (urut dari area terbesar)")
+                edited = []
+                for i,d in enumerate(detected):
+                    st.markdown(f"**Item #{i+1}** — tebakan: **{d['label']}** (area {d['area_frac']:.2%})")
+                    cols = st.columns([2,1,1,1,1])
+                    # show small color swatch
+                    cols[0].markdown(f"<div style='width:36px;height:18px;background:rgb{tuple(d['color'])};border:1px solid #444'></div>", unsafe_allow_html=True)
+                    # label select
+                    label_opt = FOOD_KEYS
+                    sel_label = cols[0].selectbox(f"Label #{i+1}", options=label_opt, index=label_opt.index(d['label']) if d['label'] in label_opt else 0, key=f"label_{i}")
+                    portion = cols[1].number_input(f"Porsi (g) #{i+1}", min_value=10, max_value=2000, value=int(d["portion_g"]), step=10, key=f"portion_{i}")
+                    match = cols[2].number_input(f"Match score #{i+1}", min_value=0.0, value=float(d["match_score"]), step=0.01, key=f"score_{i}")
+                    tex = cols[3].number_input(f"Tex #{i+1}", min_value=0.0, value=float(d["tex"]), step=0.001, key=f"tex_{i}")
+                    # suggested alternatives: compute nearest prototypes
+                    proto_scores = []
+                    for name, proto in PROTOTYPES.items():
+                        sc = _rgb_dist(d["color"], proto["rgb"]) + abs(d["tex"] - proto["tex"])*200.0
+                        proto_scores.append((name, sc))
+                    proto_scores = sorted(proto_scores, key=lambda x: x[1])
+                    alt = ", ".join([f"{p[0]}({p[1]:.1f})" for p in proto_scores[:3]])
+                    cols[4].write("Alt: " + alt)
+
+                    # recompute nutrients based on sel_label & portion
+                    per100 = FOOD_DB_PER_100G.get(sel_label, FOOD_DB_PER_100G["unknown"])
+                    factor = portion / 100.0
+                    recomputed = {
+                        "label": sel_label,
+                        "portion_g": int(portion),
+                        "kcal": round(per100["kcal"] * factor, 1),
+                        "protein_g": round(per100["protein"] * factor, 1),
+                        "fat_g": round(per100["fat"] * factor, 1),
+                        "carb_g": round(per100["carb"] * factor, 1),
+                        "potassium_mg": round(per100["potassium"] * factor, 1),
+                        "phosphate_mg": round(per100["phosphate"] * factor, 1),
+                        "calcium_mg": round(per100["calcium"] * factor, 1),
+                    }
+                    edited.append(recomputed)
+
+                # allow aggregate
+                if st.button("Recalculate totals"):
+                    df = pd.DataFrame(edited)
+                    st.dataframe(df, width=700)
+                    agg = {
+                        "Energi (kcal)": df["kcal"].sum(),
+                        "Protein (g)": df["protein_g"].sum(),
+                        "Lemak (g)": df["fat_g"].sum(),
+                        "Karbohidrat (g)": df["carb_g"].sum(),
+                        "Kalium (mg)": df["potassium_mg"].sum(),
+                        "Fosfat (mg)": df["phosphate_mg"].sum(),
+                        "Kalsium (mg)": df["calcium_mg"].sum(),
+                    }
+                    st.markdown("**Total nutrisi (setelah koreksi):**")
+                    st.write(agg)
+                    csv = df.to_csv(index=False).encode("utf-8")
+                    st.download_button("Download hasil (CSV)", data=csv, file_name="food_analysis_corrected.csv", mime="text/csv")
+                else:
+                    st.markdown("**Estimasi nutrisi (sementara):**")
+                    st.write(totals)
+                    df = pd.DataFrame([{
+                        "Makanan": d["label"],
+                        "Porsi (g)": d["portion_g"],
+                        "Energi (kcal)": d["kcal"],
+                        "Protein (g)": d["protein_g"],
+                        "Lemak (g)": d["fat_g"],
+                        "Karbohidrat (g)": d["carb_g"],
+                        "Kalium (mg)": d["potassium_mg"],
+                        "Fosfat (mg)": d["phosphate_mg"],
+                        "Kalsium (mg)": d["calcium_mg"],
+                    } for d in detected])
+                    st.dataframe(df, width=700)
+                    csv = df.to_csv(index=False).encode("utf-8")
+                    st.download_button("Download hasil (CSV)", data=csv, file_name="food_analysis_raw.csv", mime="text/csv")
+    else:
+        st.info("Belum ada foto diunggah.")
 
 st.markdown("---")
-st.header("Analisis Foto Makanan (versi ringan)")
-img_file = st.file_uploader("Upload foto", type=["jpg","png"])
-
-if img_file:
-    img = Image.open(img_file).convert("RGB")
-    st.image(img, use_container_width=True)
-
-    if st.button("Analisis"):
-        res = analyze_image(img)
-        st.write("Hasil prediksi:")
-        st.json(res)
+st.caption("⚠ Prototype: heuristic. Untuk akurasi tinggi butuh model ML atau Vision API. Gunakan koreksi manual untuk hasil klinis.")
