@@ -1,4 +1,7 @@
-# app.py
+# app_with_analysis.py
+# Versi app.py yang sudah diintegrasikan dengan modul analysis (streamlit_analysis_module)
+# Cara pakai: simpan file ini di project, pastikan streamlit_analysis_module.py ada di folder yang sama.
+
 import streamlit as st
 from PIL import Image, ImageFilter, ImageStat
 import io
@@ -6,6 +9,9 @@ import hashlib
 import numpy as np
 import pandas as pd
 import math
+
+# import modul analysis yang sudah dibuat
+from streamlit_analysis_module import run_analysis_section
 
 # ---------------------------
 # Config / DB kecil nutrisi
@@ -102,14 +108,6 @@ def _median_brightness(gray_np, mask):
 # Analyzer (main heuristic)
 # ---------------------------
 def analyze_food_image(image: Image.Image, n_clusters=4):
-    """
-    Steps:
-    - resize -> numpy
-    - quantize colors into clusters
-    - for each cluster compute area fraction, avg color, texture score (std/mean), median brightness
-    - match cluster to PROTOTYPES by combined score (color + texture + brightness)
-    - build detected list and totals
-    """
     img_np = _image_to_np(image, max_side=500)
     H,W,_ = img_np.shape
     gray = np.array(image.convert("L").resize((W,H)))  # align sizes
@@ -131,7 +129,6 @@ def analyze_food_image(image: Image.Image, n_clusters=4):
     if not masks:
         return {"detected": [], "totals": {}, "img_shape": (H,W)}
 
-    # match to prototypes with scoring weights tuned
     detected = []
     est_total_grams = 450.0  # heuristic plate mass
     for m in sorted(masks, key=lambda x: x["area"], reverse=True):
@@ -140,7 +137,6 @@ def analyze_food_image(image: Image.Image, n_clusters=4):
         for name, proto in PROTOTYPES.items():
             color_score = _rgb_dist(m["color"], proto["rgb"])
             tex_score = abs(m["tex"] - proto["tex"]) * 200.0
-            # brightness penalty to differentiate dark sauce vs protein
             bright_score = abs(m["bright"] - 0.5) * 10.0 if name == "sauce" else 0.0
             score = color_score + tex_score + bright_score
             if score < best_score:
@@ -165,7 +161,6 @@ def analyze_food_image(image: Image.Image, n_clusters=4):
             "match_score": round(best_score, 2)
         })
 
-    # aggregate totals
     totals = {"kcal":0,"protein_g":0,"fat_g":0,"carb_g":0,"potassium_mg":0,"phosphate_mg":0,"calcium_mg":0}
     for d in detected:
         for k in totals:
@@ -270,15 +265,12 @@ with right:
                 for i,d in enumerate(detected):
                     st.markdown(f"**Item #{i+1}** — tebakan: **{d['label']}** (area {d['area_frac']:.2%})")
                     cols = st.columns([2,1,1,1,1])
-                    # show small color swatch
                     cols[0].markdown(f"<div style='width:36px;height:18px;background:rgb{tuple(d['color'])};border:1px solid #444'></div>", unsafe_allow_html=True)
-                    # label select
                     label_opt = FOOD_KEYS
                     sel_label = cols[0].selectbox(f"Label #{i+1}", options=label_opt, index=label_opt.index(d['label']) if d['label'] in label_opt else 0, key=f"label_{i}")
                     portion = cols[1].number_input(f"Porsi (g) #{i+1}", min_value=10, max_value=2000, value=int(d["portion_g"]), step=10, key=f"portion_{i}")
                     match = cols[2].number_input(f"Match score #{i+1}", min_value=0.0, value=float(d["match_score"]), step=0.01, key=f"score_{i}")
                     tex = cols[3].number_input(f"Tex #{i+1}", min_value=0.0, value=float(d["tex"]), step=0.001, key=f"tex_{i}")
-                    # suggested alternatives: compute nearest prototypes
                     proto_scores = []
                     for name, proto in PROTOTYPES.items():
                         sc = _rgb_dist(d["color"], proto["rgb"]) + abs(d["tex"] - proto["tex"])*200.0
@@ -287,7 +279,6 @@ with right:
                     alt = ", ".join([f"{p[0]}({p[1]:.1f})" for p in proto_scores[:3]])
                     cols[4].write("Alt: " + alt)
 
-                    # recompute nutrients based on sel_label & portion
                     per100 = FOOD_DB_PER_100G.get(sel_label, FOOD_DB_PER_100G["unknown"])
                     factor = portion / 100.0
                     recomputed = {
@@ -303,7 +294,6 @@ with right:
                     }
                     edited.append(recomputed)
 
-                # allow aggregate
                 if st.button("Recalculate totals"):
                     df = pd.DataFrame(edited)
                     st.dataframe(df, width=700)
@@ -342,3 +332,25 @@ with right:
 
 st.markdown("---")
 st.caption("⚠ Prototype: heuristic. Untuk akurasi tinggi butuh model ML atau Vision API. Gunakan koreksi manual untuk hasil klinis.")
+
+# ---------------------------
+# Developer: quick access to analysis module
+# ---------------------------
+with st.expander("Developer: Run analysis module (demo)"):
+    st.write("Jika kamu punya model/prediksi, module analysis akan menampilkan metrik, confusion matrix, dan SHAP.")
+    st.write("Di sini demo cepat menggunakan synthetic data agar kamu lihat layoutnya.")
+    if st.button("Jalankan demo analysis (classification)"):
+        # synthetic demo data
+        y_true = np.random.choice([0,1,2], size=200, p=[0.5,0.3,0.2])
+        y_pred = np.random.choice([0,1,2], size=200, p=[0.5,0.3,0.2])
+        # dummy probabilities (3-class)
+        y_proba = np.random.rand(200,3)
+        y_proba = y_proba / y_proba.sum(axis=1, keepdims=True)
+        run_analysis_section('classification', y_true, y_pred, y_proba=y_proba, model=None, X_test=None, df=None, cohort_cols=None)
+
+    if st.button("Jalankan demo analysis (regression)"):
+        y_true = np.random.randn(200) * 10 + 100
+        y_pred = y_true + np.random.randn(200) * 8
+        run_analysis_section('regression', y_true, y_pred, y_proba=None, model=None, X_test=None, df=None, cohort_cols=None)
+
+# catatan: integrasi nyata: jika kamu ada model/ X_test, panggil run_analysis_section dengan objek tersebut.
