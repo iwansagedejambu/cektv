@@ -273,11 +273,19 @@ with c2:
             key="override_food"
         )
 
-        grams = st.number_input("Perkiraan Berat (gram)", 150, 10, key="grams_food")
+      grams = st.number_input(
+    "Perkiraan Berat (gram)",
+    min_value=10,
+    max_value=1000,
+    value=150,
+    step=10,
+    key="grams_food",
+)
 
-        if st.button("Tambah ke log makanan dari foto", key="btn_add_food"):
-            add_food(final_label, grams)
-            st.success("✅ Berhasil ditambahkan ke log makanan!")
+if st.button("Tambah ke log makanan dari foto", key="btn_add_food"):
+    add_food(final_label, grams)
+    st.success("✅ Berhasil ditambahkan ke log makanan!")
+
 
 # ---- LOG MAKANAN ----
 st.markdown("---")
