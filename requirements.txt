@@ -1,6 +1,4 @@
-streamlit==1.26.0
-numpy==1.27.4
-pandas==2.2.2
-pillow==10.1.0
-requests==2.31.0
-rich==14.2.0
+streamlit==1.38.0
+pillow==10.4.0
+pandas==2.2.3
+numpy==1.26.4
