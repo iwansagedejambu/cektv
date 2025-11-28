@@ -1,31 +1,27 @@
-import streamlit as st
+iimport streamlit as st
 import io
 from PIL import Image
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from huggingface_hub import InferenceClient
-import os  # <--- TAMBAH INI
+import os  # boleh ada, tapi tidak wajib
 
 # ============ CONFIG HALAMAN ============
 st.set_page_config(page_title="Kt/V & Food Tracker (AI)", layout="wide")
 
-# ====== LOAD API KEY HUGGING FACE DARI SECRETS / ENV ======
-HF_TOKEN = None
+# ====== LOAD API KEY HUGGING FACE DARI SECRETS CLOUD ======
+HF_TOKEN = st.secrets.get("HF_TOKEN", None)
 
-# 1) coba ambil dari st.secrets
-if "HF_TOKEN" in st.secrets:
-    HF_TOKEN = st.secrets["HF_TOKEN"]
-
-# 2) kalau belum ada, coba dari environment variable
-if HF_TOKEN is None:
-    HF_TOKEN = os.environ.get("HF_TOKEN")
+# DEBUG: supaya kelihatan apa saja keys secrets-nya
+st.sidebar.write("Secrets keys (debug):", list(st.secrets.keys()))
 
 if not HF_TOKEN:
-    st.error("HF API Key belum diset. Tambahkan HF_TOKEN di Secrets **atau** Environment Variables.")
+    st.error('HF API Key belum diset. Di Streamlit Cloud → Settings → Secrets, isi: HF_TOKEN = "hf_xxx"')
     st.stop()
 
 client = InferenceClient(token=HF_TOKEN)
+
 
 
 
