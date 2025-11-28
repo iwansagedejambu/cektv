@@ -253,7 +253,7 @@ with c1:
                 st.write("•", a)
 
 
-# ---- UPLOAD & ANALISIS FOTO MAKANAN ----
+# contoh bagian UI upload foto makanan (rapi)
 with c2:
     st.header("📸 Analisis Foto Makanan (AI)")
     up = st.file_uploader("Upload foto makanan", ["jpg","png","jpeg"])
@@ -263,28 +263,29 @@ with c2:
         st.image(img, caption="Foto makanan")
 
         label = ai_food_predict(img)
-        st.success(f"Terdeteksi AI: **{label}**")
+        st.success(f"Tebakan AI: {label}")
 
-        # User override supaya lebih logis untuk makanan campur
         final_label = st.selectbox(
-            "Jika makanan campur, kamu bisa ganti label di sini:",
-            ["unknown", "Nasi", "Ayam", "Rendang", "Sayur", label],
+            "Kalau makanan campur, kamu bisa koreksi:",
+            ["unknown", "rice", "chicken", "beef", "vegetables", label],
             index=0,
             key="override_food"
         )
 
-      grams = st.number_input(
-    "Perkiraan Berat (gram)",
-    min_value=10,
-    max_value=1000,
-    value=150,
-    step=10,
-    key="grams_food",
-)
+        # ⚠ jangan kebalik lagi, pakai named arguments biar aman
+        grams = st.number_input(
+            "Perkiraan Berat (gram)",
+            min_value=10,
+            max_value=1000,
+            value=150,
+            step=10,
+            key="grams_food",
+        )
 
-if st.button("Tambah ke log makanan dari foto", key="btn_add_food"):
-    add_food(final_label, grams)
-    st.success("✅ Berhasil ditambahkan ke log makanan!")
+        if st.button("Tambah ke log makanan dari foto", key="btn_add_food"):
+            add_food(final_label, grams)
+            st.success("✅ Berhasil ditambahkan ke log makanan!")
+
 
 
 # ---- LOG MAKANAN ----
